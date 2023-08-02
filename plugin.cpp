@@ -8,6 +8,10 @@
 namespace logger = SKSE::log;
 
 static float AccMaxSpeed = 100.0f;
+static float AccMaxSpeedDefault = 100.0f;
+static float AccMaxSpeedSprint = 100.0f;
+static bool AccSprintFullSpeed = false;
+
 static float AccMinSpeed = 1.0f;
 static float fAccJumpBoost = 40.0f;
 static bool bAccRotationDecrease = true;
@@ -57,6 +61,14 @@ static bool bAccMoveStop = false;
 static bool bAccCanDec = true;
 static int iIniRefreshHK = 28;
 
+static bool madeNegative = false;
+
+static bool bAccFAV = false;
+
+
+static bool bAccRefreshPerksIni = true;
+static bool bAccRefreshSpellsIni = true;
+
 void doLoadGame() {
     bAccGameLoaded = true;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -69,7 +81,7 @@ void getShortAngleDiff() {
     bAccIsInShort = true;
     while (true) {
         auto currAngleZ = playRf->GetAngleZ();
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));  // pause for 100 milliseconds
+        std::this_thread::sleep_for(std::chrono::milliseconds(20)); 
         auto newAngleZ = playRf->GetAngleZ();
 
         fAccAngleDiffSmall = currAngleZ - newAngleZ;
@@ -152,21 +164,276 @@ void AccGetIni() {
     
 		iIniRefreshHK = 28;
 	}
-    logger::info("Refreshed INI");
+
+    AccMaxSpeedSprint = ini.GetDoubleValue("Global", "MaxSprintSpeed", 100.0f);
+    if (AccMaxSpeedSprint < 0.01f) {
+		AccMaxSpeedSprint = AccMaxSpeedDefault;
+	}
+
+    AccSprintFullSpeed = ini.GetBoolValue("Global", "SprintFullSpeed", false);
+
+  
 }
+
+
+//get perks
+static int AccPerkAmount = 2;
+static int arraySize = 2;
+
+std::vector<std::vector<std::vector<std::string>>> getPerksIni() {
+    
+    CSimpleIniA ini;
+    ini.SetUnicode();
+    ini.LoadFile(L"Data\\SKSE\\Plugins\\SkyrimMotionControlPerks.ini");
+    CSimpleIniA::TNamesDepend keys;
+    
+  
+    arraySize = ini.GetSectionSize("Perks");
+    AccPerkAmount = arraySize;
+    const char** gatherArray = new const char*[arraySize];
+    for (int i = 0; i < arraySize; i++) {
+        std::string key = "perk" + std::to_string(i + 1);
+        gatherArray[i] = ini.GetValue("perks", key.c_str(), "");
+    }
+   
+   
+
+
+     std::vector<std::vector<std::vector<std::string>>> splitAtr(
+         arraySize, std::vector<std::vector<std::string>>(2, std::vector<std::string>(3)));
+
+     for (int i = 0; i < arraySize; i++) {
+        std::string strValue(gatherArray[i]);
+
+       
+        std::stringstream ss(strValue);
+        std::getline(ss, splitAtr[i][0][0], '|');
+        std::getline(ss >> std::ws, splitAtr[i][1][0], '|');
+        std::getline(ss >> std::ws, splitAtr[i][1][1], '|');
+        std::getline(ss >> std::ws, splitAtr[i][1][2]);
+     }
+
+   
+     
+     delete[] gatherArray;
+     return splitAtr;
+     
+ 
+
+}
+//get spells
+
+static int AccSpellsAmount = 2;
+
+static int arraySizeSpells = 2;
+
+
+
+std::vector<std::vector<std::vector<std::string>>> getSpellsIni() {
+     
+     CSimpleIniA ini;
+     ini.SetUnicode();
+     ini.LoadFile(L"Data\\SKSE\\Plugins\\SkyrimMotionControlPerks.ini");
+     CSimpleIniA::TNamesDepend keys;
+
+     arraySizeSpells = ini.GetSectionSize("Spells");
+     AccSpellsAmount = arraySizeSpells;
+     const char** gatherArray = new const char*[arraySizeSpells];
+     for (int i = 0; i < arraySizeSpells; i++) {
+        std::string key = "Spell" + std::to_string(i + 1);
+        gatherArray[i] = ini.GetValue("spells", key.c_str(), "");
+     }
+
+     std::vector<std::vector<std::vector<std::string>>> splitAtr(
+         arraySizeSpells, std::vector<std::vector<std::string>>(2, std::vector<std::string>(3)));
+
+     for (int i = 0; i < arraySizeSpells; i++) {
+        std::string strValue(gatherArray[i]);
+
+        std::stringstream ss(strValue);
+        std::getline(ss, splitAtr[i][0][0], '|');
+        std::getline(ss >> std::ws, splitAtr[i][1][0], '|');
+        std::getline(ss >> std::ws, splitAtr[i][1][1], '|');
+        std::getline(ss >> std::ws, splitAtr[i][1][2]);
+     }
+     delete[] gatherArray;
+     return splitAtr;
+     
+}
+
+
+void getSpellPerkIniOnce() {
+    
+     CSimpleIniA ini;
+     ini.SetUnicode();
+     ini.LoadFile(L"Data\\SKSE\\Plugins\\SkyrimMotionControlPerks.ini");
+     CSimpleIniA::TNamesDepend keys;
+
+     arraySizeSpells = ini.GetSectionSize("Spells");
+     AccSpellsAmount = arraySizeSpells;
+
+     arraySize = ini.GetSectionSize("Perks");
+     AccPerkAmount = arraySize;
+}
+
+static bool bAccIsInPerkTest = false;
+static int iAccHasPerk = 0;
+static int iAccHasSpell = 0;
+
+static std::vector<std::vector<std::vector<std::string>>> PerkArray;
+static std::vector<std::vector<std::vector<std::string>>> SpellArray;
+void PerkTest() {
+     bAccIsInPerkTest = true;
+      
+
+    while (true) {
+        
+        
+         auto* AccPlayer = RE::TESForm::LookupByID<RE::Actor>(0x14);
+        // Perks
+        
+        if (bAccRefreshPerksIni == true) {
+            PerkArray = getPerksIni();
+            bAccRefreshPerksIni = false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        iAccHasPerk = AccPerkAmount;
+   
+        for (int i = 0; i < AccPerkAmount; i++) {
+         
+            
+
+
+            int perkId = std::stoi(PerkArray[i][0][0], nullptr, 16);
+         
+          
+            std::string PluginName = PerkArray[i][1][0];
+          
+            int SpeedNerf = std::stoi(PerkArray[i][1][1]);
+       
+
+            auto formCheck = RE::TESformCheck::GetSingleton();
+            if (formCheck) {
+                
+                auto perk = formCheck->LookupForm<RE::BGSPerk>(perkId, PluginName);
+
+                if (perk) {
+                   
+                    if (AccPlayer) {
+                        if (AccPlayer->HasPerk(perk)) {
+                            AccMaxSpeed = SpeedNerf;
+                          
+                        }
+                        else {
+							
+                            iAccHasPerk = iAccHasPerk - 1;
+                            
+						}
+                    } else {
+                        
+                        iAccHasSpell = iAccHasSpell - 1;
+                    }
+                } else {
+                   
+                    iAccHasPerk = iAccHasPerk - 1;
+                }
+             
+            }
+        }
+        
+
+        // Spells
+       
+        if (bAccRefreshSpellsIni == true) {
+            SpellArray = getSpellsIni();
+            bAccRefreshSpellsIni = false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        
+
+        iAccHasSpell = AccSpellsAmount;
+      
+        for (int i = 0; i < AccSpellsAmount; i++) {
+            /*const char* perkNameConstChar = PerkArray[i][0][0].c_str();*/
+
+            int perkId = std::stoi(SpellArray[i][0][0], nullptr, 16);
+            /*int perkId = std::stoi();*/
+            
+            std::string PluginName = SpellArray[i][1][0];
+           
+            int SpeedNerf = std::stoi(SpellArray[i][1][1]);
+         
+
+            auto formCheck = RE::TESformCheck::GetSingleton();
+            if (formCheck) {
+                auto perk = formCheck->LookupForm<RE::SpellItem>(perkId, PluginName);
+
+                if (perk) {
+                 
+                    
+                    if (AccPlayer) {
+                   
+                        if (AccPlayer->HasSpell(perk)) {
+                          
+                            AccMaxSpeed = SpeedNerf;
+                           
+                        } else {
+                           
+                            iAccHasSpell = iAccHasSpell - 1;
+                            
+                        }
+                    } else {
+                       
+                        iAccHasSpell = iAccHasSpell - 1;
+                    }
+                } else {
+                   
+                    iAccHasSpell = iAccHasSpell - 1;
+                }
+              
+            }
+        }
+       
+        if (iAccHasPerk < 1 && iAccHasSpell < 1) {
+			AccMaxSpeed = AccMaxSpeedDefault;
+		}
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    
+   
+   
+
+}
+
 
 void AccPlayerStateTests() {
     bAccIsInPlayerStateCheck = true;
     auto* AccPlayer = RE::PlayerCharacter::GetSingleton();
 
+   
+
     while (true) {
         if (AccPlayer) {
             if (AccPlayer->AsActorState()->actorState1.sprinting) {
                 bAccIsSprinting = true;
+                AccMaxSpeed = AccMaxSpeedSprint;
+                if (AccSprintFullSpeed == true) {
+                    AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMaxSpeed);
+                }
 
-            } else {
+            } 
+            if (!AccPlayer->AsActorState()->actorState1.sprinting && (iAccHasPerk < 1) && (iAccHasSpell < 1)) {
+                bAccIsSprinting = false;
+                AccMaxSpeed = AccMaxSpeedDefault;
+                if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) > AccMaxSpeed) {
+                    AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMaxSpeed);
+                }
+            }
+            if (!AccPlayer->AsActorState()->actorState1.sprinting) {
                 bAccIsSprinting = false;
             }
+            if ((iAccHasPerk > 1) && (iAccHasSpell > 1)) {
+                 AccMaxSpeed = AccMaxSpeedDefault;}
 
             if (AccPlayer->AsActorState()->actorState1.meleeAttackState != RE::ATTACK_STATE_ENUM::kNone ||
                 AccPlayer->AsActorState()->actorState2.wantBlocking) {
@@ -177,23 +444,26 @@ void AccPlayerStateTests() {
             if (!AccPlayer->AsActorState()->actorState2.wantBlocking &&
                 AccPlayer->AsActorState()->actorState1.meleeAttackState == RE::ATTACK_STATE_ENUM::kNone) {
                 bIsWeapUtil = false;
+                
             }
-            
-            if (AccPlayer->AsActorState()->IsWeaponDrawn()) {
-                AccSp = AccSpD;
-                bAccIsWeapDrawn = true;
-                if (bAccDisableOnWeaponDraw == true) {
-                    bAccDisable = true;
-                    AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMaxSpeed);
-                }
-                if (bAccDisableOnWeaponDraw == false) {
-                    bAccDisable = false;
-                }
-            } else {
-                AccSp = AccSpS;
-                bAccIsWeapDrawn = false;
-                bAccDisable = false;
-            }
+         
+
+if (AccPlayer->AsActorState()->IsWeaponDrawn()) {
+    AccSp = AccSpD;
+    bAccIsWeapDrawn = true;
+    if (bAccDisableOnWeaponDraw == true) {
+        bAccDisable = true;
+        AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMaxSpeed);
+    }
+    if (bAccDisableOnWeaponDraw == false) {
+        bAccDisable = false;
+    }
+}
+else {
+    AccSp = AccSpS;
+    bAccIsWeapDrawn = false;
+    bAccDisable = false;
+}
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -213,7 +483,8 @@ void MoveCheck() {
         if (oldC < nwC) {
             bIsMoving = true;
             iIsMovingCount = 0;
-        } else if (oldC == nwC) {
+        }
+        else if (oldC == nwC) {
             bIsMoving = false;
             iIsMovingCount = 0;
         }
@@ -247,7 +518,7 @@ void AccPlayerAcceleration() {
                     AccHolderTwo = AccSpD;
                 }
                 AccPlayer->AsActorValueOwner()->ModActorValue(RE::ActorValue::kSpeedMult,
-                                                              AccHolderTwo * fAccSpeedupMult);
+                    AccHolderTwo * fAccSpeedupMult);
                 AccPlayerSpeed = AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult);
             }
         }
@@ -257,6 +528,40 @@ void AccPlayerAcceleration() {
     }
 }
 
+static bool bAccIsInSpeedCorrection = false;
+void SpeedCorrection() {
+    bAccIsInSpeedCorrection = true;
+    auto* AccPlayer = RE::PlayerCharacter::GetSingleton();
+
+    while (true) {
+        if (AccPlayer) {
+           
+            if (AccPlayer->AsActorValueOwner()->GetBaseActorValue(RE::ActorValue::kSpeedMult) !=
+                (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult))) {
+                bAccFAV = true;
+
+                if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) > 0) {
+                    
+                    AccPlayer->AsActorValueOwner()->RestoreActorValue(
+                       
+                        RE::ACTOR_VALUE_MODIFIER::kPermanent, RE::ActorValue::kSpeedMult,
+                        (AccPlayer->AsActorValueOwner()->GetBaseActorValue(RE::ActorValue::kSpeedMult) -
+                         AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult)));
+                } else if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) < 0) {
+                    
+                    AccPlayer->AsActorValueOwner()->RestoreActorValue(
+                       
+                        RE::ACTOR_VALUE_MODIFIER::kPermanent, RE::ActorValue::kSpeedMult,
+                        (AccPlayer->AsActorValueOwner()->GetBaseActorValue(RE::ActorValue::kSpeedMult) -
+                         AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult)) );
+                }
+            } 
+        }  
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+}
+
 void AccPlayerDeacceleration() {
     bAccIsInDeAcc = true;
     bAccIsInAcc = false;
@@ -264,31 +569,30 @@ void AccPlayerDeacceleration() {
         if (bAccIsInAcc == false && bIsMoving == false) {
             auto* AccPlayer = RE::PlayerCharacter::GetSingleton();
             if (AccPlayer != nullptr) {
-                if (bAccMoveStop == false) {
                 
-                if (bAccIsInAcc == false && bIsMoving == false && bIsWeapUtil == false && bAccIsSprinting == false &&
+                if (bAccMoveStop == false) {
+                    
+                    if (bAccIsInAcc == false && bIsMoving == false && bIsWeapUtil == false && bAccIsSprinting == false &&
                         bAccDisable == false) {
-                    bool madeNegative = false;
-                    if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) >= AccMinSpeed) {
-                        if (fAccStopSp < 1.0f) {
-                            AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult,
-                                                                          -AccMaxSpeed * fAccStopSp);
-                        }
-                        if (fAccStopSp == 1.0f) {
-                            AccPlayer->AsActorValueOwner()->SetActorValue(
-                                RE::ActorValue::kSpeedMult,
-                                AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) * (-20.00f));
+                       
+                        madeNegative = false;
+                        if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) >= AccMinSpeed) {
+                            if (fAccStopSp < 1.0f) {
+                                AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult,
+                                    -AccMaxSpeed * fAccStopSp);
+                                
+                            }
+                            madeNegative = true;
+                            bAccCanDec = false;
                         }
 
-                        madeNegative = true;
-                        bAccCanDec = false;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+                        if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) < AccMinSpeed &&
+                            madeNegative == true) {
+                            AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMinSpeed);
+                        }
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(30));
-                    if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) < AccMinSpeed &&
-                        madeNegative == true) {
-                        AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMinSpeed);
-                    }
-                }
                 }
                 if (bAccMoveStop == true) {
                 if (bAccIsInAcc == false && bIsMoving == false && bIsWeapUtil == false && bAccIsSprinting == false &&
@@ -296,16 +600,22 @@ void AccPlayerDeacceleration() {
                         !AccPlayer->AsActorState()->actorState1.movingForward &&
                     !AccPlayer->AsActorState()->actorState1.movingLeft &&
                     !AccPlayer->AsActorState()->actorState1.movingRight) {
-                    bool madeNegative = false;
+                    madeNegative = false;
                     if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) >= AccMinSpeed) {
                         if (fAccStopSp < 1.0f) {
                             AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult,
                                                                           -AccMaxSpeed * fAccStopSp);
+                            
                         }
-                        if (fAccStopSp == 1.0f) {
-                            AccPlayer->AsActorValueOwner()->SetActorValue(
-                                RE::ActorValue::kSpeedMult,
-                                AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) * (-20.00f));
+                        if (AccPlayer->AsActorValueOwner()->GetBaseActorValue(RE::ActorValue::kSpeedMult) !=
+                            (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult))) {
+                            bAccFAV = true;
+                            AccPlayer->AsActorValueOwner()->RestoreActorValue(
+                                RE::ACTOR_VALUE_MODIFIER::kPermanent, RE::ActorValue::kSpeedMult,
+                                ((AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) * -1.0f) +
+                                 (AccPlayer->AsActorValueOwner()->GetBaseActorValue(
+                                     RE::ActorValue::kSpeedMult))) 
+                            );
                         }
 
                         madeNegative = true;
@@ -315,6 +625,10 @@ void AccPlayerDeacceleration() {
                     if (AccPlayer->AsActorValueOwner()->GetActorValue(RE::ActorValue::kSpeedMult) < AccMinSpeed &&
                         madeNegative == true) {
                         AccPlayer->AsActorValueOwner()->SetActorValue(RE::ActorValue::kSpeedMult, AccMinSpeed);
+
+                        
+                        
+                        
                     }
                 }
                 }
@@ -359,6 +673,13 @@ public:
                 event->QUserEvent() == "Strafe Left" || event->QUserEvent() == "Strafe Right" ||
                 event->QUserEvent() == "Back" || event->QUserEvent() == "Sprint" || event->QUserEvent() == "Jump" ||
                 event->QUserEvent() == "Sneak") {
+
+                if (bAccIsInSpeedCorrection == false) {
+                    std::thread AccPlayerSpeedCorrectionThread(SpeedCorrection);
+					AccPlayerSpeedCorrectionThread.detach();
+
+                }
+
                 iIsMovingCount = iIsMovingCount + 1;
 
                 std::thread AccPlayerAccelerationThread(AccPlayerAcceleration);
@@ -399,6 +720,14 @@ public:
                 if (dxScanCode == iIniRefreshHK) {
                     AccGetIni();
                     
+                    bAccRefreshSpellsIni = true;
+                    bAccRefreshPerksIni = true;
+
+                    
+                
+                    
+                    
+                    
                 }
                 
             
@@ -414,6 +743,11 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kInputLoaded) {
         RE::BSInputDeviceManager::GetSingleton()->AddEventSink(AccEventSink::GetSingleton());
         AccGetIni();
+        getSpellPerkIniOnce();
+        if (bAccIsInPerkTest == false) {
+            std::thread PerkT(PerkTest);
+            PerkT.detach();
+        }
     }
 
     if (message->type == SKSE::MessagingInterface::kPostLoadGame) {
